@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
-	"io"
+	//"io"
 	"os"
+	"strings"
 )
 
 //тут по заданию функция принмает на вход путь к файлу и возвращает его содержимое, то есть нам нужно прочитать его и буффер перевести в стринг и вернуть.
@@ -23,21 +25,22 @@ func ReadContent(filename string) string {
 	// }()
 	defer file.Close()
 
-	//теперь читаем
-	buffer := make([]byte, 1024)
-	for {
-		_, err := file.Read(buffer) // читаем часть в буфер
-		if err == io.EOF { // Ошибка показывает, что файл прочитан полностью
-			break // и выходим из цикла
-		}
+	//теперь читаем, методом "считывать файл построчно"
+	fileScanner := bufio.NewScanner(file) // создаем сканер
 
-		if err != nil { // в случае nil тоже обрабатываем
-			return "" // тут возвращ. пустую строку - это для всех ошибок по заданию
-		}
+	var builder strings.Builder // создаем билдер - в него будем собирать строки со сканера
+	for fileScanner.Scan() {
+		builder.WriteString(fileScanner.Text())
+		builder.WriteString("\n")
 	}
 
-	//и как всё прочиталось, приводим слайс байт буффера в стринг и возвращаем
-	return string(buffer)
+	//обрабатываем ошибку сканера
+	if err := fileScanner.Err(); err != nil {
+		return ""
+	}
+
+	//возвращаем итог (билдер)
+	return builder.String()
 }
 
 func main() {
