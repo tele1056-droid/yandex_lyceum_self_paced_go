@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 	"context"
+	"fmt"
 )
 var client = &http.Client{} // создаем клиента глобально для отправки запроса, т.к. не нужно создавать нового клиента для каждого запроса
 
@@ -26,54 +27,89 @@ type APIResponse struct {
 
 func FetchAPI(ctx context.Context, urls []string, timeout time.Duration) []*APIResponse {
 	//создаем контекст с таймаутом, чтобы ограничить время запроса и отмены ожидания свыше timeout
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	results := make([]*APIResponse, len(urls)) // созаем слайс APIResponse размером с колич. urls
+	results := make([]*APIResponse, len(urls)) // создаем слайс APIResponse размером с колич. urls
 
 	// запускаем цикл который будет запускать горутину с каждым url для создания запроса и получения данных, но тут нужно еще сделать concurrently для горутин - это wg := sync.WaitGroup{}, wg.Add(2) и defer wg.Done()
-	wg := sync.WaitGroup{} //объявляем wg один раз, до цикла, чтобы wg.Wait() видел wg
+	var wg sync.WaitGroup //объявляем wg один раз, до цикла, чтобы wg.Wait() видел wg
 	for i, url := range urls {
-		
 		wg.Add(1)
 		go func(idx int, u string) {
 			defer wg.Done()
 			//тут нужно запускать запрос и обработку желательно отдельной функцие, но пока так
+			resp := &APIResponse{URL: u} //тут создаем "заготовку" структуры с заполн. полем URL и в resp сохраняем адрес этой заготвки и дальше по этому адресу заполним остальные поля
 			req, err := http.NewRequest(http.MethodGet, u, nil)
 			if err != nil {
-				return //TODO: как тут ошибку вернуть в объект APIResponse
+				 //TODO: как тут ошибку вернуть в объект APIResponse
+				 //тут в ошибках, в заготовку структуры в поле Err записываем ошибку и потом эту заготовку (с заполн. полями URL и Err) записываем в слайс заготовок
+				resp.Err = err
+				results[idx] = resp
+				return
 			}
-			resp, errDeadEx := client.Do(req.WithContext(ctx))
-			if errDeadEx != nil {
-				return //TODO: errDeadEx
+
+			//отправляем запрос с контекстом
+			res, err := client.Do(req.WithContext(ctx))
+			if err != nil {
+				resp.Err = err
+				results[idx] = resp
+				return 
 			}
-			defer resp.Body.Close()
+			defer res.Body.Close()
 
 			//читаем тело ответа
-			body, err := io.ReadAll(resp.Body)
+			body, err := io.ReadAll(res.Body)
 			if err != nil {
-				return //TODO: err
+				 //TODO: err
+				resp.Err = err 
+				results[idx] = resp
+				return
 			}
 
 			//собираем данные для структуры
-			response := APIResponse{
-				URL: u,
-				Data: string(body),
-				StatusCode: resp.StatusCode,
-				Err: ,// как сюда положить ошибки?
-			}
+			resp.Data = string(body)
+			resp.StatusCode = res.StatusCode
+			results[idx] = resp
 
-		}(url)
+		}(i ,url)
 	}
 	wg.Wait() // тут Wait() должен быть?
-	return // и тут надо ретернить?
+	return results // и тут надо ретернить?
 }
-
 
 
 func main() {
+    // 1. Создаём контекст (можно Background, но лучше с таймаутом)
+    ctx := context.Background()
 
+    // 2. Список URL для запросов
+    urls := []string{
+        "https://httpbin.org/get",
+        "https://httpbin.org/get?test=1",
+        "https://httpbin.org/status/404",
+        "https://httpbin.org/delay/1",
+    }
+
+    // 3. Вызываем функцию с таймаутом 5 секунд
+    results := FetchAPI(ctx, urls, 5*time.Second)
+
+    // 4. Выводим результаты
+    for i, res := range results {
+        fmt.Printf("--- Запрос %d ---\n", i+1)
+        fmt.Printf("URL: %s\n", res.URL)
+        
+        if res.Err != nil {
+            fmt.Printf("Ошибка: %v\n", res.Err)
+            continue
+        }
+        
+        fmt.Printf("Статус: %d\n", res.StatusCode)
+        fmt.Printf("Длина данных: %d байт\n", len(res.Data))
+        fmt.Println()
+    }
 }
+
 
 /*
 2. sync.WaitGroup
