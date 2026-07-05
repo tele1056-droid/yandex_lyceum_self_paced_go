@@ -2,113 +2,97 @@ package main
 
 import (
 	"context"
-	"errors"
+	//"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
+	"sync"
 )
 
+type result struct {
+    name  string
+    score int
+    err   error
+}
+
 func Compare(name1, name2 string) (string, error) {
-	//нужно сформировать запрос по адресу localhost:8082/mark?name=<имя студента>
-	// net/url (правильный способ) и используем его т.к. могут быть имена с пробелами, но при этом способе будет создаваться валид URL
-	base := "http://localhost:8082/mark" // тут обяз. http://
-	// nameFrst := name1
-	// nameScnd := name2
+    results := make(chan result, 2)
+    var wg sync.WaitGroup
 
-	//создаем параметры
-	params1 := url.Values{}
-	params1.Set("name", name1)
-	url1 := base + "?" + params1.Encode()
-	
-	params2 := url.Values{}
-	params2.Set("name", name2)
-	url2 := base + "?" + params2.Encode()
+    // Запускаем запросы параллельно
+    for _, name := range []string{name1, name2} {
+        wg.Add(1)
+        go func(n string) {
+            defer wg.Done()
+            score, err := fetchScore(n)
+            results <- result{name: n, score: score, err: err}
+        }(name)
+    }
 
-	//сделать запрос с контекстом, ну чтобы отменить запрос через время, если не отвечает сервер
-	//создаем запрос с контекстом
-	ctx, cancel := context.WithTimeout(context.Background(),5*time.Second)
-	defer cancel()
+    // Закрываем канал после завершения всех горутин
+    go func() {
+        wg.Wait()
+        close(results)
+    }()
 
-	//создаем клиент
-	client := &http.Client{}
+    // Собираем результаты
+    scores := make(map[string]int)
+    for res := range results {
+        if res.err != nil {
+            return "", fmt.Errorf("ошибка для %s: %w", res.name, res.err)
+        }
+        scores[res.name] = res.score
+    }
 
-	//запрос req (request)
-	req1, err := http.NewRequest(http.MethodGet, url1, nil)
-	if err != nil {
-		fmt.Println(err)
-		return "", nil
-	}
-	//отправляем запрос resp (response)
-	resp1, err := client.Do(req1.WithContext(ctx))
-	if err != nil {
-		fmt.Println(err)
-		return "", nil
-	}
-	//закрываем resp
-	defer resp1.Body.Close()
+    // Сравниваем
+    score1 := scores[name1]
+    score2 := scores[name2]
 
-	//тут делаем проверку на статус, http.StatusOK - это константа из пакета net/http там int 200
-	if resp1.StatusCode != http.StatusOK {
-		return "", errors.New(resp1.Status)
-	}
+    switch {
+    case score1 > score2:
+        return ">", nil
+    case score1 < score2:
+        return "<", nil
+    default:
+        return "=", nil
+    }
+}
 
-	//читаем тело ответа
-	body1, err := io.ReadAll(resp1.Body)
-	if err != nil {
-		fmt.Println("Ошибка чтения:", err)
-		return "", nil
-	}
-	
+// fetchScore — функция для получения оценки
+func fetchScore(name string) (int, error) {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
 
-	//если статутс 200, то сохраним содержимое body1(а там слайс байт) в перемен. приведеную к int. Т.к. по HTTP всё передаётся как текс (поток байт), то нам нужно этот поток привести к стринг и потом к инт
-	comp_body1, err := strconv.Atoi(string(body1))
-	if err != nil {
-		fmt.Println(err)
-		return "", nil
-	}
+    base := "http://localhost:8082/mark"
+    params := url.Values{}
+    params.Set("name", name)
+    fullURL := base + "?" + params.Encode()
 
-	//выше мы сохранили значение запроса для первого name1, осталось сделать все тоже самое для name2, и потом сделать саму работу
-	req2, err := http.NewRequest(http.MethodGet, url2, nil)
-	if err != nil {
-		fmt.Println(err)
-		return "", nil
-	}
+    req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+    if err != nil {
+        return 0, err
+    }
 
-	resp2, err := client.Do(req2.WithContext(ctx))
-	if err != nil {
-		fmt.Println(err)
-		return "", nil
-	}
-	defer resp2.Body.Close()
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        return 0, err
+    }
+    defer resp.Body.Close()
 
-	if resp2.StatusCode != http.StatusOK {
-		return "", errors.New(resp2.Status)
-	}
+    if resp.StatusCode != http.StatusOK {
+        return 0, fmt.Errorf("статус %d", resp.StatusCode)
+    }
 
-	body2, err := io.ReadAll(resp2.Body)
-	if err != nil {
-		fmt.Println("Ошибка чтения:", err)
-		return "", nil
-	}
+    body, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return 0, err
+    }
 
-	comp_body2, err := strconv.Atoi(string(body2))
-	if err != nil {
-		fmt.Println(err)
-		return "", nil
-	}
-
-	//делаем работу
-	switch {
-	case comp_body1 > comp_body2:
-		return ">", nil
-	case comp_body1 < comp_body2:
-		return "<", nil
-	default:
-		return "=", nil
-	}
+    return strconv.Atoi(string(body))
 }
 
 func main() {
@@ -124,3 +108,32 @@ func main() {
 */
 
 //тут конечно много дублирования, надо по сути запрос и обработку в отдельную функцию
+
+//				ПАТТЕРН ДЛЯ ПОДОБНЫХ ЗАДАЧ
+/*
+func Compare(...) {
+    results := make(chan result, 2)
+    var wg sync.WaitGroup
+
+    // 1. Запускаем горутины
+    for _, name := range []string{name1, name2} {
+        wg.Add(1)
+        go func(n string) {
+            defer wg.Done()
+            // ... делаем запрос ...
+            results <- result{name: n, score: score, err: err}
+        }(name)
+    }
+
+    // 2. Запускаем горутину-«закрывалку»
+    go func() {
+        wg.Wait()
+        close(results)
+    }()
+
+    // 3. Читаем результаты
+    for res := range results {
+        // обрабатываем
+    }
+}
+*/
