@@ -7,16 +7,22 @@ import (
 )
 
 func GeneratePrimeNumbers(stop chan struct{}, prime_nums chan int, N int) {
-	//var wg sync.WaitGroup
 	// создаем поток выполнениея горутины (основной работы - генрации простых чисел)
+	// и тут нужно применять select, т.к. используются несколько каналов. То есть на каждой итерации проверяется закрыт ли канал stop (а у нас он закрывается посредствам time.AfterFunc через 0,1 сек - выполняется команда закрытия канала close(stop)) и выполняется закрытие канала prime_nums и выход из функции. То есть на каждой итерации проверяется, не пришёл ли сигнал stop
 	go func() {
-		for i := 2; i < N; i++ {
-			if isPrime(i) {
-				prime_nums <-i
-			}
-		}
-		close(prime_nums) // именно тут закрываем канал, т.к. одна горутина пишет в канал, как все записалось, то закрываем
-	}()
+        for i := 2; i < N; i++ {
+            select {
+            case <-stop:
+                close(prime_nums)
+                return
+            default:
+                if isPrime(i) {
+                    prime_nums <- i
+                }
+            }
+        }
+        close(prime_nums) // если дошли до N. именно тут закрываем канал, т.к. одна горутина пишет в канал, как все записалось, то закрываем
+    }()
 	
 	/*
 	Как выбрать как закрывать канал close(ch) или sync.WaitGroup
@@ -31,12 +37,10 @@ func GeneratePrimeNumbers(stop chan struct{}, prime_nums chan int, N int) {
 	*/
 
 	//создаем тайм-аут, который не даёт функции выполнятся дольше заданого время
-	timeout := time.AfterFunc(100 * time.Millisecond, func() {
-		stop <- struct{}{} // тут передаем анонимную пустую структуру в канал для структур, как сигнал в канале
-	})
-	close(stop)
-
-	timeout.Stop() // отмена функции тайм-аута
+	//то есть тут ерез 100 мс канал stop закрывается, В цикле select видит, что stop закрыт → выполняет case <-stop и генерация останавливается
+    time.AfterFunc(100*time.Millisecond, func() {
+        close(stop) // сигнал остановки
+    })
 }
 
 //тут создаем функцию для провреки на простое число
@@ -51,6 +55,8 @@ func isPrime(n int) bool {
     }
     return true
 }
+
+
 
 func main() {
 
