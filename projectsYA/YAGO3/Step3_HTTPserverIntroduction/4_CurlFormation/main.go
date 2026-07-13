@@ -10,13 +10,41 @@ func MakeCurlCommand(method, url, headers, body string) string {
 
 	//и тут еще нужно учитвать пустые параметры, если они пустые (""), то нужно делать проверку и формировать итог строку без них (т.е. если нет body то не должно быть --data)
 
-	//если через fmt.Sprintf, то нужно для каждого условия формировать отдельную строку, этот вариант запушу на гит, и сделаем через strings.Builder
-	if method == "GET" {
+	//попробуем через вариант strings.Builder - это тип из стандартной библиотеки, который позволяет эффективно собирать строки из частей без лишних аллокаций памяти
+	var sb strings.Builder // это буфер в ктором будем формировать итог. строку, последовательно командой за командой будет собираться строка
+	//*strings.Builder — это как конвейер: ты добавляешь части одну за другой, а в конце получаешь готовую строку.
+	sb.WriteString("curl")
+	//Каждый WriteString добавляет в конец!!!
+	//тут отрабатываем все методы кроме GET, если GET то ничего в итог строку не вставляем
+	if method != "GET" {
+		sb.WriteString(" -X ")
+		sb.WriteString(method)
+		sb.WriteString(" ")
 
+	} else {
+		sb.WriteString(" ")
 	}
 
-	fmtHeaders := formatHeaders(headers)
-	strCurl := fmt.Sprintf("curl -X %s %s --data '%s' %s",method, fmtHeaders, body, url)
+	fmtHeaders := formatHeaders(headers) //тут формируем заголовки и подсатвляем в буфер
+	if headers != "" {
+		
+		sb.WriteString(fmtHeaders)
+		sb.WriteString(" ")
+	}
+
+	if body != "" {
+		sb.WriteString("--data '")
+		sb.WriteString(body)
+		sb.WriteString("' ")
+		//тут обвернуть body в одинарные кавычки лучше так
+	}
+
+	
+	
+	sb.WriteString(url)
+
+	
+	strCurl := sb.String() //формируем итог. строку
 
 	return strCurl
 }
@@ -37,6 +65,19 @@ func formatHeaders(headers string) string {
 	return strings.Join(parts, " ") //и соединяем через пробел
 }
 
+//			ОСНОВНЫЕ МЕТОДЫ ДЛЯ strings.Builder
+/*
+Метод					Что делает				Пример
+WriteString(s string)	Добавляет строку		sb.WriteString("Hello")
+WriteByte(b byte)		Добавляет байт			sb.WriteByte(' ')
+WriteRune(r rune)		Добавляет символ		sb.WriteRune('😊')
+Write(p []byte)			Добавляет байты			sb.Write([]byte("abc"))
+String()				Возвращает собранную строку	result := sb.String()
+Len()					Длина текущей строки	sb.Len()
+Reset()					Очищает буфер			sb.Reset()
+Grow(n int)				Зарезервировать память	sb.Grow(1024)
+*/
+
 func main() {
 // 	res := MakeCurlCommand(
 //   "POST",
@@ -48,8 +89,8 @@ func main() {
 res := MakeCurlCommand(
   "POST",
   "https://example.com/api/users",
-  "",
-  "",
+  "Content-Type: application/json\n",
+  `{"name":"John Doe","email":"johndoe@example.com","password":"123456"}`,
 )
 	fmt.Println(res)
 }
