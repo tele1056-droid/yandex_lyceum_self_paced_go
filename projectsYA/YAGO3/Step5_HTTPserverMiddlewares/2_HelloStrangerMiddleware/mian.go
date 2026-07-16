@@ -1,120 +1,100 @@
-package main
-
-import (
-	"fmt"
-	//"unicode"
-	"net/http"
-	//"log"
-)
-
 /*основные ошибки с автотестом:
 1. Всегда используй http.HandlerFunc для передачи функции в middleware.
 Т.е. мой основной хендлер (helloHandler) в автотесте передается как объект с типом http.Handler, и вызывается в цепочке  middleware. А у меня хендлер оформлен как функция
 
-2. 
+					РЕШЕНИЕ ПРОБЛЕМЫ АВТОТЕСТА
+поменял у Sanitize и SetDefaultName:
+(next http.Handler) http.Handler -> (next http.HandlerFunc) http.HandlerFunc и автотест прошел. Т.е. замени Sanitize и SetDefaultName на работу с http.HandlerFunc напрямую
 */
 
 
-//основной хендлер, и тут определяем именно функцию-обработчик
- func HelloHandler(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	name := query.Get("name")
-	//обрабатываем запрос и возвращаем строку клиенту
-	fmt.Fprintf(w, "hello %s", name)
-}
+package main
 
-// 2. Создаём переменную типа http.Handler, а здесь к helloHandler делаем тип http.Handler
-//var HelloHandler http.Handler = http.HandlerFunc(helloHandler)
+import (
+    "fmt"
+    "net/http"
+)
 
-//тут проверка мидлваре что name (только буквы)
-func Sanitize(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query()
-		name := query.Get("name")
+// ====== ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ======
 
-		//проверяем только на англ. буквы (если есть цифры, не англ. буквы, другие символы)
-		if !CheckOnlyASCII(name) {
-			fmt.Fprint(w, "hello dirty hacker")
-			return 
-		}
-
-		next.ServeHTTP(w, r) //не забываем передать управление след. обработчику
-
-	})
-}
-
-//тут отдельный мидлаваре для параметр name отсутствует или пустой
-func SetDefaultName(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query()
-		name := query.Get("name")
-		if name == "" {
-			// Может быть и отсутствие, и пустота
-		// Проверяем, есть ли ключ
-		if _, ok := query["name"]; !ok { //если "отсутствует", то в ok=false
-			//заходим сюда, значит ключа нет
-			fmt.Fprint(w, "hello stranger") //это по условию нужно вернуть
-			return
-			}
-			//тут ключ есть, но пустой
-			fmt.Fprintf(w, "hello stranger")
-			return
-		}
-
-		next.ServeHTTP(w, r) //не забываем передать управление след. обработчику
-	})
-}
-
-
-
+// CheckOnlyASCII проверяет, что строка состоит только из английских букв
 func CheckOnlyASCII(s string) bool {
-	countASCII := 0
-	for _, letter := range s {
-		//тут нужно смотреть символы в этих диапазонах 65–90, 97–122
-		if (letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z'){
-			countASCII++
-			continue
-		}
-	}
-	if countASCII == len(s) {
-		return true
-	} else {
-		return false
-	}
-
-	/* эту проверку можно реализовать эффективнее
-	if s == "" {
-        return false // пустая строка → невалидна
+    if s == "" {
+        return false
     }
-    for _, letter := range s {
-        if !((letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z')) {
+    for _, r := range s {
+        if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')) {
             return false
         }
     }
     return true
-	*/
 }
 
+// ====== MIDDLEWARE ======
+
+// Sanitize — проверяет, что name состоит только из английских букв
+func Sanitize(next http.HandlerFunc) http.HandlerFunc {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        name := r.URL.Query().Get("name")
+
+        // Если имя пустое — пропускаем (дальше SetDefaultName)
+        if name == "" {
+            next.ServeHTTP(w, r)
+            return
+        }
+
+        // Если имя невалидно — возвращаем "hello dirty hacker"
+        if !CheckOnlyASCII(name) {
+            fmt.Fprint(w, "hello dirty hacker")
+            return
+        }
+
+        // Всё ок — передаём дальше
+        next.ServeHTTP(w, r)
+    })
+}
+
+// SetDefaultName — подставляет "stranger", если name отсутствует или пустой
+func SetDefaultName(next http.HandlerFunc) http.HandlerFunc {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        query := r.URL.Query()
+        name := query.Get("name")
+
+        // Если name пустой или отсутствует
+        if name == "" {
+            // Проверяем, есть ли ключ "name" в запросе
+            if _, ok := query["name"]; !ok || name == "" {
+                fmt.Fprint(w, "hello stranger")
+                return
+            }
+        }
+
+        // Передаём дальше (имя есть и валидно)
+        next.ServeHTTP(w, r)
+    })
+}
+
+// ====== ОСНОВНОЙ ОБРАБОТЧИК ======
+
+// HelloHandler — возвращает "hello <name>"
+func HelloHandler(w http.ResponseWriter, r *http.Request) {
+    name := r.URL.Query().Get("name")
+    fmt.Fprintf(w, "hello %s", name)
+}
+
+// ====== ЗАПУСК СЕРВЕРА ======
+
 func main() {
-	/*
-	mux := http.NewServeMux()
-	hello := http.HandlerFunc(HelloHandler)
+    mux := http.NewServeMux()
 
-	mux.Handle("/hello", SetDefaultName(Sanitize(hello)))
-	//тут Порядок выполнения: Sanitize → SetDefaultName → helloHandler
+    // Оборачиваем обработчик в middleware
+    // Порядок: Sanitize → SetDefaultName → HelloHandler
+    handler := SetDefaultName(Sanitize(http.HandlerFunc(HelloHandler)))
 
-	if err := http.ListenAndServe(":8080", mux); err != nil {
-		log.Fatal(err)
-	} // --handler = LoggingMiddleware(mux)
-	*/
+    mux.Handle("/hello", handler)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/hello", HelloHandler)
-
-	// Добавляем middleware для записи запросов
-	handler := SetDefaultName(Sanitize(mux))
-
-	http.ListenAndServe(":8080", handler)
+    fmt.Println("Server started on :8080")
+    http.ListenAndServe(":8080", mux)
 }
 
 //Порядок выполнения middleware определяется тем, как ты оборачиваешь их, а не тем, как они расположены в коде.
